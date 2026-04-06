@@ -45,7 +45,68 @@ jobs:
           submodules: recursive
           ref: ${{ inputs.git_ref }}
 
-      - name: Verify Package.swift uses Prism fork
+      - name: Align Xcode package reference to Prism fork
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import sys
+
+          pbxproj = Path("mlx-swift-examples.xcodeproj/project.pbxproj")
+          text = pbxproj.read_text(encoding="utf-8")
+
+          anchor = '/* XCRemoteSwiftPackageReference "mlx-swift" */ = {'
+          anchor_index = text.find(anchor)
+          if anchor_index == -1:
+              print("project.pbxproj から mlx-swift の package reference を見つけられませんでした。", file=sys.stderr)
+              sys.exit(1)
+
+          line_start = text.rfind("\n", 0, anchor_index) + 1
+          line_end = text.find("\n", line_start)
+          header_line = text[line_start:line_end]
+
+          open_brace = text.find("{", anchor_index)
+          if open_brace == -1:
+              print("mlx-swift package reference block の開始 '{' を見つけられませんでした。", file=sys.stderr)
+              sys.exit(1)
+
+          depth = 0
+          block_end = -1
+          for i in range(open_brace, len(text)):
+              ch = text[i]
+              if ch == "{":
+                  depth += 1
+              elif ch == "}":
+                  depth -= 1
+                  if depth == 0:
+                      block_end = i
+                      break
+
+          if block_end == -1:
+              print("mlx-swift package reference block の終了 '}' を見つけられませんでした。", file=sys.stderr)
+              sys.exit(1)
+
+          new_block = "\n".join([
+              header_line,
+              "\t\t\tisa = XCRemoteSwiftPackageReference;",
+              "\t\t\trepositoryURL = \"https://github.com/PrismML-Eng/mlx-swift.git\";",
+              "\t\t\trequirement = {",
+              "\t\t\t\tbranch = prism;",
+              "\t\t\t\tkind = branch;",
+              "\t\t\t};",
+              "\t\t}",
+          ])
+
+          updated = text[:line_start] + new_block + text[block_end + 1:]
+          pbxproj.write_text(updated, encoding="utf-8")
+          print("project.pbxproj の mlx-swift 参照を Prism fork / branch=prism に整合しました。")
+          PY
+
+          grep -n 'XCRemoteSwiftPackageReference "mlx-swift"\|repositoryURL = "https://github.com/PrismML-Eng/mlx-swift.git"\|branch = prism;' mlx-swift-examples.xcodeproj/project.pbxproj
+
+      - name: Verify Prism dependency declarations
         shell: bash
         run: |
           set -euo pipefail
@@ -61,7 +122,17 @@ jobs:
             exit 1
           fi
 
-          echo "Package.swift の mlx-swift 依存が Prism fork であることを確認しました。"
+          if ! grep -q 'repositoryURL = "https://github.com/PrismML-Eng/mlx-swift.git"' mlx-swift-examples.xcodeproj/project.pbxproj; then
+            echo "project.pbxproj の mlx-swift repositoryURL が Prism fork ではありません。"
+            exit 1
+          fi
+
+          if ! grep -q 'branch = prism;' mlx-swift-examples.xcodeproj/project.pbxproj; then
+            echo "project.pbxproj の mlx-swift requirement が branch=prism ではありません。"
+            exit 1
+          fi
+
+          echo "Package.swift と project.pbxproj の mlx-swift 依存が Prism fork / prism branch であることを確認しました。"
 
       - name: Show build environment
         shell: bash
