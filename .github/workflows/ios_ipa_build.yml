@@ -1,0 +1,137 @@
+name: iOS IPA Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: "ビルド対象の ref（branch / tag / commit）"
+        required: true
+        default: "376bf12bb55bfdc11d722ee0213f3bbfa9095b26"
+      scheme:
+        description: "iOS アプリ Scheme"
+        required: true
+        type: choice
+        default: "LLMEval"
+        options:
+          - LLMEval
+          - MLXChatExample
+          - StableDiffusionExample
+          - MNISTTrainer
+          - LoRATrainingExample
+          - LLMBasic
+      configuration:
+        description: "ビルド設定"
+        required: true
+        type: choice
+        default: "Release"
+        options:
+          - Release
+          - Debug
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}-${{ inputs.scheme }}
+  cancel-in-progress: true
+
+jobs:
+  build_unsigned_ipa:
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          ref: ${{ inputs.git_ref }}
+
+      - name: Verify Package.swift uses Prism fork
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! grep -q 'https://github.com/PrismML-Eng/mlx-swift.git' Package.swift; then
+            echo "Package.swift に Prism fork 依存が見つかりません。"
+            echo "期待: .package(url: \"https://github.com/PrismML-Eng/mlx-swift.git\", branch: \"prism\")"
+            exit 1
+          fi
+
+          if ! grep -q 'branch: "prism"' Package.swift; then
+            echo "Package.swift に branch: \"prism\" が見つかりません。"
+            exit 1
+          fi
+
+          echo "Package.swift の mlx-swift 依存が Prism fork であることを確認しました。"
+
+      - name: Show build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Resolve package dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          find . -name Package.resolved -delete
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project mlx-swift-examples.xcodeproj \
+            -scheme "${{ inputs.scheme }}"
+
+      - name: Build iOS app (unsigned)
+        shell: bash
+        env:
+          SCHEME: ${{ inputs.scheme }}
+          CONFIGURATION: ${{ inputs.configuration }}
+        run: |
+          set -euo pipefail
+          DERIVED_DATA="${RUNNER_TEMP}/DerivedData"
+          PRODUCTS_DIR="${DERIVED_DATA}/Build/Products/${CONFIGURATION}-iphoneos"
+          LOG_FILE="${RUNNER_TEMP}/${SCHEME}-${CONFIGURATION}-build.log"
+
+          rm -rf "${DERIVED_DATA}"
+
+          xcodebuild clean build \
+            -project mlx-swift-examples.xcodeproj \
+            -scheme "${SCHEME}" \
+            -configuration "${CONFIGURATION}" \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "${DERIVED_DATA}" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            | tee "${LOG_FILE}"
+
+          APP_PATH="$(find "${PRODUCTS_DIR}" -maxdepth 1 -type d -name '*.app' | head -n 1)"
+          if [ -z "${APP_PATH}" ]; then
+            echo "app bundle が見つかりませんでした: ${PRODUCTS_DIR}"
+            exit 1
+          fi
+
+          PAYLOAD_DIR="${RUNNER_TEMP}/Payload"
+          mkdir -p "${PAYLOAD_DIR}"
+          rm -rf "${PAYLOAD_DIR}"/*.app
+          cp -R "${APP_PATH}" "${PAYLOAD_DIR}/"
+
+          IPA_PATH="${RUNNER_TEMP}/${SCHEME}-${CONFIGURATION}-unsigned.ipa"
+          rm -f "${IPA_PATH}"
+          (
+            cd "${RUNNER_TEMP}"
+            /usr/bin/zip -qry "${IPA_PATH}" Payload
+          )
+
+          echo "IPA_PATH=${IPA_PATH}" >> "${GITHUB_ENV}"
+          echo "LOG_FILE=${LOG_FILE}" >> "${GITHUB_ENV}"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.scheme }}-${{ inputs.configuration }}-unsigned-ipa
+          path: |
+            ${{ env.IPA_PATH }}
+            ${{ env.LOG_FILE }}
+          if-no-files-found: error
+          retention-days: 14
