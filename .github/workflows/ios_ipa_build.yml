@@ -73,13 +73,41 @@ jobs:
 
       - name: Resolve package dependencies
         shell: bash
+        env:
+          SCHEME: ${{ inputs.scheme }}
         run: |
           set -euo pipefail
-          find . -name Package.resolved -delete
-          xcodebuild \
-            -resolvePackageDependencies \
-            -project mlx-swift-examples.xcodeproj \
-            -scheme "${{ inputs.scheme }}"
+
+          DERIVED_DATA="${RUNNER_TEMP}/DerivedData"
+          SOURCE_PACKAGES="${RUNNER_TEMP}/SourcePackages"
+          PACKAGE_CACHE="${RUNNER_TEMP}/PackageCache"
+
+          clean_spm_state() {
+            rm -rf "${DERIVED_DATA}" "${SOURCE_PACKAGES}" "${PACKAGE_CACHE}"
+            rm -rf "${HOME}/Library/Developer/Xcode/DerivedData/SourcePackages"
+            rm -rf "${HOME}/Library/Caches/org.swift.swiftpm"
+            rm -rf "${HOME}/.swiftpm/cache" "${HOME}/.swiftpm/repositories"
+            find . -name Package.resolved -delete
+          }
+
+          resolve_cmd=(
+            xcodebuild
+            -resolvePackageDependencies
+            -project mlx-swift-examples.xcodeproj
+            -scheme "${SCHEME}"
+            -derivedDataPath "${DERIVED_DATA}"
+            -clonedSourcePackagesDirPath "${SOURCE_PACKAGES}"
+            -packageCachePath "${PACKAGE_CACHE}"
+            -disablePackageRepositoryCache
+          )
+
+          clean_spm_state
+
+          if ! "${resolve_cmd[@]}"; then
+            echo "初回の依存解決に失敗したため、SwiftPM キャッシュを掃除して再試行します。"
+            clean_spm_state
+            "${resolve_cmd[@]}"
+          fi
 
       - name: Build iOS app (unsigned)
         shell: bash
@@ -89,6 +117,8 @@ jobs:
         run: |
           set -euo pipefail
           DERIVED_DATA="${RUNNER_TEMP}/DerivedData"
+          SOURCE_PACKAGES="${RUNNER_TEMP}/SourcePackages"
+          PACKAGE_CACHE="${RUNNER_TEMP}/PackageCache"
           PRODUCTS_DIR="${DERIVED_DATA}/Build/Products/${CONFIGURATION}-iphoneos"
           LOG_FILE="${RUNNER_TEMP}/${SCHEME}-${CONFIGURATION}-build.log"
 
@@ -100,6 +130,9 @@ jobs:
             -configuration "${CONFIGURATION}" \
             -destination "generic/platform=iOS" \
             -derivedDataPath "${DERIVED_DATA}" \
+            -clonedSourcePackagesDirPath "${SOURCE_PACKAGES}" \
+            -packageCachePath "${PACKAGE_CACHE}" \
+            -disablePackageRepositoryCache \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
