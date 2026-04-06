@@ -192,7 +192,9 @@ jobs:
           PACKAGE_CACHE="${RUNNER_TEMP}/PackageCache"
           PRODUCTS_DIR="${DERIVED_DATA}/Build/Products/${CONFIGURATION}-iphoneos"
           LOG_FILE="${RUNNER_TEMP}/${SCHEME}-${CONFIGURATION}-build.log"
-          XCODE_VERSION="$(xcodebuild -version | awk '/Xcode/{print $2; exit}')"
+          XCODE_VERSION_RAW="$(xcodebuild -version)"
+          XCODE_VERSION="${XCODE_VERSION_RAW#Xcode }"
+          XCODE_VERSION="${XCODE_VERSION%%$'\n'*}"
           XCODE_MAJOR="${XCODE_VERSION%%.*}"
           EXTRA_BUILD_SETTINGS=()
 
