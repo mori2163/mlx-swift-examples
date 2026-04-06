@@ -192,6 +192,19 @@ jobs:
           PACKAGE_CACHE="${RUNNER_TEMP}/PackageCache"
           PRODUCTS_DIR="${DERIVED_DATA}/Build/Products/${CONFIGURATION}-iphoneos"
           LOG_FILE="${RUNNER_TEMP}/${SCHEME}-${CONFIGURATION}-build.log"
+          XCODE_VERSION="$(xcodebuild -version | awk '/Xcode/{print $2; exit}')"
+          XCODE_MAJOR="${XCODE_VERSION%%.*}"
+          EXTRA_BUILD_SETTINGS=()
+
+          if ! [[ "${XCODE_MAJOR}" =~ ^[0-9]+$ ]]; then
+            echo "Xcode major version の解析に失敗しました: ${XCODE_VERSION}"
+            XCODE_MAJOR=0
+          fi
+
+          if [ "${SCHEME}" = "LLMEval" ] && [ "${XCODE_MAJOR}" -lt 26 ]; then
+            echo "Xcode ${XCODE_VERSION} では AppIcon.icon が未対応のため、CI ビルドでは AppIcon 指定を無効化します。"
+            EXTRA_BUILD_SETTINGS+=(ASSETCATALOG_COMPILER_APPICON_NAME=)
+          fi
 
           rm -rf "${DERIVED_DATA}"
 
@@ -207,6 +220,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            "${EXTRA_BUILD_SETTINGS[@]}" \
             | tee "${LOG_FILE}"
 
           APP_PATH="$(find "${PRODUCTS_DIR}" -maxdepth 1 -type d -name '*.app' | head -n 1)"
