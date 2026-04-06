@@ -44,7 +44,7 @@ class LLMEvaluator {
     private var firstTokenTime: TimeInterval = 0
 
     /// This controls which model loads.
-    var modelConfiguration = LLMRegistry.qwen3_8b_4bit
+    var modelConfiguration = LLMModelFactory.shared.configuration(id: "prism-ml/Bonsai-8B-mlx-1bit")
 
     /// Parameters controlling the generation output (max tokens and temperature).
     var generateParameters: GenerateParameters {
